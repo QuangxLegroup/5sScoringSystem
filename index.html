@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LeGroup 5S</title>
+    <link rel="icon" href="../images/Logo.jpg">
+    <link rel="apple-touch-icon" href="../images/Logo.jpg">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <section class="login-screen" id="login-screen">
+      <form class="login-card" id="login-form">
+        <div class="brand-line">
+          <img class="brand-logo" src="../images/Logo.jpg" alt="LeGroup">
+          <div>
+            <p class="eyebrow">LeGroup</p>
+            <h1>Đăng nhập</h1>
+          </div>
+        </div>
+
+        <label>
+          <span>Tài khoản</span>
+          <input id="login-username" type="text" autocomplete="username" required>
+        </label>
+
+        <label>
+          <span>Mật khẩu</span>
+          <input id="login-password" type="password" autocomplete="current-password" required>
+        </label>
+
+        <button class="primary-button" type="submit">Vào hệ thống</button>
+      </form>
+    </section>
+
+    <div class="app-shell" id="app-shell" hidden>
+      <header class="app-header">
+        <div class="brand-line">
+          <img class="brand-logo" src="../images/Logo.jpg" alt="LeGroup">
+          <div>
+            <p class="eyebrow">LeGroup</p>
+            <h1>Đánh Giá 5S</h1>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="Điều hướng">
+          <button class="tab-button" type="button" data-tab="summary">Bảng Excel</button>
+          <button class="tab-button admin-only" type="button" data-tab="catalog">Danh mục</button>
+          <button class="tab-button admin-only" type="button" data-tab="accounts">Tài khoản</button>
+        </nav>
+
+        <div class="user-box">
+          <div>
+            <strong id="current-user-name"></strong>
+            <span id="current-user-role"></span>
+          </div>
+          <button class="secondary-button" id="logout-button" type="button">Đăng xuất</button>
+        </div>
+      </header>
+
+      <main class="app-main">
+
+        <section class="tab-panel" id="tab-summary">
+          <div class="toolbar compact-toolbar summary-toolbar">
+            <label>
+              <span>Kỳ đánh giá</span>
+              <select id="summary-period-select"></select>
+            </label>
+            <div class="permission-note manager-only" id="assigned-zone-summary"></div>
+            <button class="primary-button admin-only" id="export-excel-button" type="button">Xuất Excel</button>
+          </div>
+
+          <section class="sheet-panel">
+            <div class="section-heading">
+              <h2 id="summary-title">Điểm Chi Tiết Theo Từng Hạng Mục</h2>
+            </div>
+            <div class="table-wrap wide-table-wrap">
+              <table class="matrix-table" id="summary-table"></table>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-panel admin-only" id="tab-catalog">
+          <div class="catalog-grid">
+            <section class="panel">
+              <div class="section-heading">
+                <h2>Kỳ đánh giá</h2>
+              </div>
+              <form class="form-grid" id="period-form">
+                <label>
+                  <span>Tháng</span>
+                  <input id="period-month" type="number" min="1" max="12" required>
+                </label>
+                <label>
+                  <span>Năm</span>
+                  <input id="period-year" type="number" min="2020" max="2100" required>
+                </label>
+                <button class="primary-button full-span" type="submit">Tạo kỳ mới</button>
+              </form>
+              <div class="compact-list" id="period-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="section-heading">
+                <h2>Người chấm</h2>
+              </div>
+              <form class="stacked-form" id="scorer-form">
+                <label>
+                  <span>Tên người chấm</span>
+                  <input id="scorer-name" type="text" autocomplete="off" required>
+                </label>
+                <button class="primary-button" type="submit">Thêm người chấm</button>
+              </form>
+              <div class="compact-list" id="scorer-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="section-heading">
+                <h2>Zone và trưởng phòng</h2>
+              </div>
+              <form class="stacked-form" id="area-form">
+                <label>
+                  <span>Mã zone</span>
+                  <input id="area-code" type="text" autocomplete="off" required>
+                </label>
+                <label>
+                  <span>Trưởng phòng</span>
+                  <input id="area-head" type="text" autocomplete="off">
+                </label>
+                <label>
+                  <span>Nhóm tổng điểm</span>
+                  <input id="area-summary-group" type="text" autocomplete="off">
+                </label>
+                <label>
+                  <span>Người chấm</span>
+                  <select id="area-scorer" required></select>
+                </label>
+                <label class="check-line">
+                  <input id="area-highlight" type="checkbox">
+                  <span>Tô vàng mã zone</span>
+                </label>
+                <button class="primary-button" type="submit">Thêm zone</button>
+              </form>
+              <div class="compact-list" id="area-list"></div>
+            </section>
+
+            <section class="panel catalog-items-panel">
+              <div class="section-heading">
+                <h2>Hạng mục 5S cố định</h2>
+              </div>
+              <div class="item-list" id="item-list"></div>
+            </section>
+
+            <section class="panel danger-panel">
+              <div class="section-heading">
+                <h2>Dữ liệu local</h2>
+              </div>
+              <button class="danger-button" id="reset-data-button" type="button">Reset về mẫu 5S</button>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel admin-only" id="tab-accounts">
+          <div class="accounts-grid">
+            <section class="panel">
+              <div class="section-heading">
+                <h2>Tạo tài khoản người chấm</h2>
+              </div>
+              <form class="stacked-form" id="account-form">
+                <label>
+                  <span>Người chấm</span>
+                  <select id="account-scorer" required></select>
+                </label>
+                <label>
+                  <span>Tài khoản</span>
+                  <input id="account-username" type="text" autocomplete="off" required>
+                </label>
+                <label>
+                  <span>Mật khẩu</span>
+                  <input id="account-password" type="text" autocomplete="off" required minlength="4">
+                </label>
+                <button class="primary-button" type="submit">Thêm tài khoản</button>
+              </form>
+            </section>
+
+            <section class="panel">
+              <div class="section-heading">
+                <h2>Danh sách tài khoản</h2>
+              </div>
+              <div class="account-list" id="account-list"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="modal-backdrop" hidden>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-header">
+          <h2 id="modal-title"></h2>
+          <button class="icon-button" id="modal-close-button" type="button" aria-label="Đóng">×</button>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-actions" id="modal-actions"></div>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
