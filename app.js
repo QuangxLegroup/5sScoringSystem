@@ -2,7 +2,7 @@
   "use strict";
 
   const DATA_VERSION = 4;
-  const STORAGE_KEY = "legroup-5s-local-v4";
+  const DB_PATH = "legroup-5s";
   const BENCHMARK = 3.3;
   const PAGE_SIZE = 10;
   const XLSX_ROW_OFFSET = 1;
@@ -229,10 +229,40 @@
     toast: document.getElementById("toast"),
   };
 
-  let state = loadState();
+  let state = null;
   let currentUser = null;
   let activeTab = "summary";
   let toastTimer = 0;
+  let db = null; // Firebase database reference
+
+  // ─── Firebase helpers ───────────────────────────────────────────────────────
+
+  function getDb() {
+    if (!db) {
+      firebase.initializeApp(FIREBASE_CONFIG);
+      db = firebase.database();
+    }
+    return db;
+  }
+
+  function dbRef(path) {
+    return path ? getDb().ref(`${DB_PATH}/${path}`) : getDb().ref(DB_PATH);
+  }
+
+  // Convert Firebase snapshot (object keyed by id) → sorted array
+  function snapshotToArray(snapshot) {
+    const result = [];
+    if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)) {
+      Object.values(snapshot).forEach((item) => {
+        if (item && typeof item === "object") {
+          result.push(item);
+        }
+      });
+    }
+    return result;
+  }
+
+  // ─── Default / normalize state ───────────────────────────────────────────────
 
   function createDefaultState() {
     const now = new Date().toISOString();
@@ -321,32 +351,18 @@
     return scores;
   }
 
-  function loadState() {
-    try {
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (stored?.version === DATA_VERSION) {
-        return normalizeState(stored);
-      }
-    } catch (error) {
-      console.warn("Cannot read localStorage", error);
-    }
-
-    const defaultState = createDefaultState();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultState));
-    return defaultState;
-  }
-
+  // Convert raw Firebase data (nested objects) → normalised state with arrays
   function normalizeState(raw) {
     const normalized = {
       ...raw,
       version: DATA_VERSION,
       benchmark: Number(raw.benchmark) || BENCHMARK,
-      periods: Array.isArray(raw.periods) ? raw.periods : [],
-      managers: Array.isArray(raw.managers) ? raw.managers : [],
-      areas: Array.isArray(raw.areas) ? raw.areas : [],
-      accounts: Array.isArray(raw.accounts) ? raw.accounts : [],
-      scores: Array.isArray(raw.scores) ? raw.scores : [],
-      history: Array.isArray(raw.history) ? raw.history : [],
+      periods: snapshotToArray(raw.periods),
+      managers: snapshotToArray(raw.managers),
+      areas: snapshotToArray(raw.areas),
+      accounts: snapshotToArray(raw.accounts),
+      scores: snapshotToArray(raw.scores),
+      history: snapshotToArray(raw.history),
     };
 
     if (!normalized.accounts.some((account) => account.username === ADMIN_USERNAME && account.role === "admin")) {
@@ -378,8 +394,69 @@
     return normalized;
   }
 
-  function saveState() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  // Convert arrays → keyed objects for Firebase storage
+  function stateToFirebase(s) {
+    function toObj(arr) {
+      if (!Array.isArray(arr) || arr.length === 0) return null;
+      const obj = {};
+      arr.forEach((item) => {
+        if (item?.id) obj[item.id] = item;
+      });
+      return obj;
+    }
+
+    return {
+      version: s.version,
+      benchmark: s.benchmark,
+      activePeriodId: s.activePeriodId || "",
+      periods: toObj(s.periods),
+      managers: toObj(s.managers),
+      areas: toObj(s.areas),
+      accounts: toObj(s.accounts),
+      scores: toObj(s.scores),
+      history: toObj(s.history),
+    };
+  }
+
+  // ─── Load from Firebase (once on startup) ────────────────────────────────────
+
+  async function loadStateFromFirebase() {
+    const snapshot = await dbRef().once("value");
+    const raw = snapshot.val();
+
+    if (raw && raw.version === DATA_VERSION) {
+      return normalizeState(raw);
+    }
+
+    // First run or version mismatch → seed default data
+    const defaultState = createDefaultState();
+    await dbRef().set(stateToFirebase(defaultState));
+    return defaultState;
+  }
+
+  // ─── Save helpers (granular writes to Firebase) ───────────────────────────────
+
+  async function saveState() {
+    await dbRef().set(stateToFirebase(state));
+  }
+
+  async function saveScore(score) {
+    await dbRef(`scores/${score.id}`).set(score);
+  }
+
+  async function deleteScoreFromDb(scoreId) {
+    await dbRef(`scores/${scoreId}`).remove();
+  }
+
+  async function saveHistoryEntry(entry) {
+    await dbRef(`history/${entry.id}`).set(entry);
+  }
+
+  async function saveMeta() {
+    await dbRef().update({
+      activePeriodId: state.activePeriodId || "",
+      benchmark: state.benchmark,
+    });
   }
 
   function makeId(prefix) {
@@ -626,7 +703,7 @@
     const periodId = period?.id || "";
     const areas = getAreas();
     const editableAreaIds = options.editableAreaIds || new Set();
-    const canEdit = options.editable && currentUser?.role !== "admin";
+    const canEdit = options.editable;
     const includeFormulas = Boolean(options.formulas);
     const firstScoreRow = 5;
     const lastAreaColumn = excelColumnName(3 + areas.length);
@@ -890,7 +967,7 @@
 
   function renderSummaryTab() {
     const period = getPeriod();
-    const editable = currentUser?.role !== "admin";
+    const isAdmin = currentUser?.role === "admin";
     const allowedAreaIds = getAllowedAreaIds();
     const assignedAreas = getAreas().filter((area) => allowedAreaIds.has(area.id));
     elements.summaryTitle.textContent = `Điểm Chi Tiết Theo Từng Hạng Mục - ${periodLabel(period)}`;
@@ -901,8 +978,9 @@
     }
     buildMatrixTable(elements.summaryTable, {
       periodId: period?.id,
-      editable,
+      editable: true,
       editableAreaIds: allowedAreaIds,
+      adminMode: isAdmin,
     });
   }
 
@@ -920,7 +998,7 @@
         return `<article class="compact-item">
           <div>
             <strong>${escapeHtml(periodLabel(period))}</strong>
-            <span>${period.id === state.activePeriodId ? "Kỳ đang dùng để chấm và xuất file" : "Kỳ lưu trong localStorage"}</span>
+            <span>${period.id === state.activePeriodId ? "Kỳ đang dùng để chấm và xuất file" : "Kỳ lưu trên Firebase"}</span>
           </div>
           <div class="compact-actions">
             <button class="tiny-button" type="button" data-action="activate-period" data-id="${escapeHtml(period.id)}">${active}</button>
@@ -1046,15 +1124,23 @@
       return;
     }
 
+    const isAdmin = currentUser?.role === "admin";
     const record = getScoreRecord(periodId, area.id, item.id, criterion.id);
-    const value = Number.isFinite(record?.score) ? String(record.score) : "";
+    const hasScore = Number.isFinite(record?.score);
+    const value = hasScore ? String(record.score) : "";
     const options = ["", "1", "2", "3", "4", "5"]
       .map((score) => `<option value="${score}" ${score === value ? "selected" : ""}>${score || "Chưa chấm"}</option>`)
       .join("");
 
+    // Admin delete button shown only when there is an existing score
+    const deleteBtn = isAdmin && hasScore
+      ? `<button class="danger-button" type="button" id="modal-delete-score-btn">Xóa điểm này</button>`
+      : "";
+
     openFormModal({
       title: "Sửa điểm",
       submitText: "Lưu điểm",
+      extraActions: deleteBtn,
       html: `
         <div class="modal-context">
           <span><strong>Zone:</strong> ${escapeHtml(area.code)} · ${escapeHtml(getAreaScorerName(area))}</span>
@@ -1063,7 +1149,7 @@
         </div>
         <label>
           <span>Điểm</span>
-          <select name="score" required>${options}</select>
+          <select name="score">${options}</select>
         </label>
         <label>
           <span>Ghi chú</span>
@@ -1085,15 +1171,74 @@
           criterion,
           score: nextScore,
           note: String(formData.get("note") || "").trim(),
-        });
-        showToast("Đã lưu điểm.");
-        renderAll();
+        }).then(() => {
+          showToast("Đã lưu điểm.");
+          renderAll();
+        }).catch(() => showToast("Lỗi khi lưu điểm.", true));
         return true;
       },
     });
+
+    // Wire up the admin delete button after modal is rendered
+    if (isAdmin && hasScore) {
+      setTimeout(() => {
+        const deleteScoreBtn = document.getElementById("modal-delete-score-btn");
+        if (deleteScoreBtn) {
+          deleteScoreBtn.addEventListener("click", () => {
+            closeModal();
+            openConfirmModal({
+              title: "Xóa điểm",
+              message: `Xóa điểm của Zone ${area.code} – ${item.code} (${criterion.label})?`,
+              confirmText: "Xóa điểm",
+              danger: true,
+              onConfirm() {
+                deleteScore({ periodId, area, item, criterion, record })
+                  .then(() => {
+                    showToast("Đã xóa điểm.");
+                    renderAll();
+                  })
+                  .catch(() => showToast("Lỗi khi xóa điểm.", true));
+              },
+            });
+          });
+        }
+      }, 0);
+    }
   }
 
-  function setScore({ periodId, area, item, criterion, score, note }) {
+  async function deleteScore({ periodId, area, item, criterion, record }) {
+    if (!record) return;
+
+    // Remove from local state
+    state.scores = state.scores.filter((s) => s.id !== record.id);
+
+    // Remove from Firebase
+    await deleteScoreFromDb(record.id);
+
+    // Log history
+    const historyEntry = {
+      id: makeId("history"),
+      timestamp: new Date().toISOString(),
+      periodId,
+      periodLabel: periodLabel(getPeriod(periodId)),
+      userName: getAccountDisplayName(currentUser),
+      username: currentUser?.username || "",
+      areaId: area.id,
+      areaCode: area.code,
+      itemId: item.id,
+      itemCode: item.code,
+      itemName: item.name,
+      criterionId: criterion.id,
+      criterionLabel: criterion.label,
+      beforeLabel: String(record.score),
+      afterLabel: "Đã xóa",
+      note: "Admin xóa điểm",
+    };
+    state.history.unshift(historyEntry);
+    await saveHistoryEntry(historyEntry);
+  }
+
+  async function setScore({ periodId, area, item, criterion, score, note }) {
     const existingIndex = state.scores.findIndex(
       (record) =>
         record.periodId === periodId &&
@@ -1113,7 +1258,9 @@
 
     if (score === null && !note) {
       if (existingIndex >= 0) {
+        const removedId = state.scores[existingIndex].id;
         state.scores.splice(existingIndex, 1);
+        await deleteScoreFromDb(removedId);
       }
     } else {
       const payload = {
@@ -1134,9 +1281,10 @@
       } else {
         state.scores.push(payload);
       }
+      await saveScore(payload);
     }
 
-    state.history.unshift({
+    const historyEntry = {
       id: makeId("history"),
       timestamp: new Date().toISOString(),
       periodId,
@@ -1153,14 +1301,14 @@
       beforeLabel,
       afterLabel,
       note,
-    });
-
-    saveState();
+    };
+    state.history.unshift(historyEntry);
+    await saveHistoryEntry(historyEntry);
   }
 
-  function logAdminChange({ subjectLabel, beforeLabel = "", afterLabel = "", changeLabel = "", areaCode = "", note = "" }) {
+  async function logAdminChange({ subjectLabel, beforeLabel = "", afterLabel = "", changeLabel = "", areaCode = "", note = "" }) {
     const period = getPeriod();
-    state.history.unshift({
+    const historyEntry = {
       id: makeId("history"),
       timestamp: new Date().toISOString(),
       periodId: period?.id || "",
@@ -1174,15 +1322,20 @@
       changeLabel: changeLabel || `${beforeLabel || "-"} → ${afterLabel || "-"}`,
       note,
       source: "admin",
-    });
+    };
+    state.history.unshift(historyEntry);
+    await saveHistoryEntry(historyEntry);
   }
 
-  function openFormModal({ title, html, submitText = "Lưu", submitClass = "primary-button", onSubmit }) {
+  function openFormModal({ title, html, submitText = "Lưu", submitClass = "primary-button", extraActions = "", onSubmit }) {
     elements.modalTitle.textContent = title;
     elements.modalBody.innerHTML = `<form class="modal-form" id="modal-form">${html}</form>`;
     elements.modalActions.innerHTML = `
-      <button class="secondary-button" type="button" data-action="modal-cancel">Hủy</button>
-      <button class="${submitClass}" type="submit" form="modal-form">${escapeHtml(submitText)}</button>
+      ${extraActions ? `<div class="modal-actions-left">${extraActions}</div>` : ""}
+      <div class="modal-actions-right">
+        <button class="secondary-button" type="button" data-action="modal-cancel">Hủy</button>
+        <button class="${submitClass}" type="submit" form="modal-form">${escapeHtml(submitText)}</button>
+      </div>
     `;
 
     const form = document.getElementById("modal-form");
@@ -1220,7 +1373,7 @@
     elements.modalActions.innerHTML = "";
   }
 
-  function handlePeriodSubmit(event) {
+  async function handlePeriodSubmit(event) {
     event.preventDefault();
     const month = Number(elements.periodMonth.value);
     const year = Number(elements.periodYear.value);
@@ -1241,22 +1394,23 @@
         createdAt: new Date().toISOString(),
       };
       state.periods.push(period);
+      await dbRef(`periods/${period.id}`).set(period);
     }
 
     state.activePeriodId = period.id;
-    logAdminChange({
+    await saveMeta();
+    await logAdminChange({
       subjectLabel: "Kỳ đánh giá",
       afterLabel: periodLabel(period),
       changeLabel: existed ? `Mở lại ${periodLabel(period)}` : `Tạo kỳ mới ${periodLabel(period)}`,
-      note: existed ? "Kỳ đã tồn tại trong localStorage" : "Kỳ mới bắt đầu trống điểm",
+      note: existed ? "Kỳ đã tồn tại trên Firebase" : "Kỳ mới bắt đầu trống điểm",
     });
-    saveState();
     elements.periodForm.reset();
     showToast("Đã tạo kỳ mới trống để chấm lại.");
     renderAll();
   }
 
-  function handleScorerSubmit(event) {
+  async function handleScorerSubmit(event) {
     event.preventDefault();
     const name = elements.scorerName.value.trim();
     if (!name) {
@@ -1264,19 +1418,20 @@
       return;
     }
 
-    state.managers.push({ id: makeId("scorer"), name, createdAt: new Date().toISOString() });
-    logAdminChange({
+    const newManager = { id: makeId("scorer"), name, createdAt: new Date().toISOString() };
+    state.managers.push(newManager);
+    await dbRef(`managers/${newManager.id}`).set(newManager);
+    await logAdminChange({
       subjectLabel: "Người chấm",
       afterLabel: name,
       changeLabel: `Thêm người chấm ${name}`,
     });
-    saveState();
     elements.scorerForm.reset();
     showToast("Đã thêm người chấm.");
     renderAll();
   }
 
-  function handleAreaSubmit(event) {
+  async function handleAreaSubmit(event) {
     event.preventDefault();
     const code = elements.areaCode.value.trim();
     const scorerId = elements.areaScorer.value;
@@ -1286,7 +1441,7 @@
       return;
     }
 
-    state.areas.push({
+    const newArea = {
       id: makeId("area"),
       order: Math.max(0, ...state.areas.map((area) => Number(area.order) || 0)) + 1,
       code,
@@ -1296,21 +1451,22 @@
       scorerId,
       highlight: elements.areaHighlight.checked,
       createdAt: new Date().toISOString(),
-    });
-    logAdminChange({
+    };
+    state.areas.push(newArea);
+    await dbRef(`areas/${newArea.id}`).set(newArea);
+    await logAdminChange({
       subjectLabel: "Zone",
       areaCode: code,
       afterLabel: `${code} · ${elements.areaHead.value.trim() || "-"} · ${getManager(scorerId)?.name || ""}`,
       changeLabel: `Thêm zone ${code}`,
     });
 
-    saveState();
     elements.areaForm.reset();
     showToast("Đã thêm zone.");
     renderAll();
   }
 
-  function handleAccountSubmit(event) {
+  async function handleAccountSubmit(event) {
     event.preventDefault();
     const scorerId = elements.accountScorer.value;
     const username = elements.accountUsername.value.trim();
@@ -1326,21 +1482,22 @@
       return;
     }
 
-    state.accounts.push({
+    const newAccount = {
       id: makeId("account"),
       role: "manager",
       scorerId,
       username,
       password,
       createdAt: new Date().toISOString(),
-    });
-    logAdminChange({
+    };
+    state.accounts.push(newAccount);
+    await dbRef(`accounts/${newAccount.id}`).set(newAccount);
+    await logAdminChange({
       subjectLabel: "Tài khoản người chấm",
       afterLabel: `${username} · ${getManager(scorerId)?.name || ""}`,
       changeLabel: `Thêm tài khoản ${username}`,
     });
 
-    saveState();
     elements.accountForm.reset();
     showToast("Đã thêm tài khoản người chấm.");
     renderAll();
@@ -1368,15 +1525,18 @@
         }
         const beforeName = manager.name;
         manager.name = name;
-        logAdminChange({
-          subjectLabel: "Người chấm",
-          beforeLabel: beforeName,
-          afterLabel: name,
-          changeLabel: `Sửa người chấm ${beforeName}`,
-        });
-        saveState();
-        showToast("Đã cập nhật người chấm.");
-        renderAll();
+        Promise.all([
+          dbRef(`managers/${manager.id}`).update({ name }),
+          logAdminChange({
+            subjectLabel: "Người chấm",
+            beforeLabel: beforeName,
+            afterLabel: name,
+            changeLabel: `Sửa người chấm ${beforeName}`,
+          }),
+        ]).then(() => {
+          showToast("Đã cập nhật người chấm.");
+          renderAll();
+        }).catch(() => showToast("Lỗi khi cập nhật.", true));
         return true;
       },
     });
@@ -1399,16 +1559,20 @@
       confirmText: "Xóa",
       danger: true,
       onConfirm() {
-        logAdminChange({
-          subjectLabel: "Người chấm",
-          beforeLabel: manager.name,
-          afterLabel: "Đã xóa",
-          changeLabel: `Xóa người chấm ${manager.name}`,
-        });
+        const removedAccounts = state.accounts.filter((account) => account.scorerId === id);
         state.managers = state.managers.filter((item) => item.id !== id);
         state.accounts = state.accounts.filter((account) => account.scorerId !== id);
-        saveState();
-        showToast("Đã xóa người chấm.");
+        const writes = [
+          dbRef(`managers/${id}`).remove(),
+          ...removedAccounts.map((a) => dbRef(`accounts/${a.id}`).remove()),
+          logAdminChange({
+            subjectLabel: "Người chấm",
+            beforeLabel: manager.name,
+            afterLabel: "Đã xóa",
+            changeLabel: `Xóa người chấm ${manager.name}`,
+          }),
+        ];
+        Promise.all(writes).then(() => showToast("Đã xóa người chấm.")).catch(() => showToast("Lỗi khi xóa.", true));
       },
     });
   }
@@ -1450,16 +1614,19 @@
         area.summaryGroup = String(formData.get("summaryGroup") || "").trim();
         area.scorerId = String(formData.get("scorerId") || "");
         area.highlight = formData.get("highlight") === "on";
-        logAdminChange({
-          subjectLabel: "Zone",
-          areaCode: area.code,
-          beforeLabel,
-          afterLabel: `${area.code} · ${area.departmentHead || "-"} · ${area.summaryGroup || "-"} · ${getAreaScorerName(area)}`,
-          changeLabel: `Sửa zone ${area.code}`,
-        });
-        saveState();
-        showToast("Đã cập nhật zone.");
-        renderAll();
+        Promise.all([
+          dbRef(`areas/${area.id}`).set(area),
+          logAdminChange({
+            subjectLabel: "Zone",
+            areaCode: area.code,
+            beforeLabel,
+            afterLabel: `${area.code} · ${area.departmentHead || "-"} · ${area.summaryGroup || "-"} · ${getAreaScorerName(area)}`,
+            changeLabel: `Sửa zone ${area.code}`,
+          }),
+        ]).then(() => {
+          showToast("Đã cập nhật zone.");
+          renderAll();
+        }).catch(() => showToast("Lỗi khi cập nhật.", true));
         return true;
       },
     });
@@ -1473,22 +1640,26 @@
 
     openConfirmModal({
       title: "Xóa zone",
-      message: `Xóa zone ${area.code}? Điểm của zone này trong localStorage cũng sẽ bị xóa.`,
+      message: `Xóa zone ${area.code}? Điểm của zone này trên Firebase cũng sẽ bị xóa.`,
       confirmText: "Xóa",
       danger: true,
       onConfirm() {
-        logAdminChange({
-          subjectLabel: "Zone",
-          areaCode: area.code,
-          beforeLabel: `${area.code} · ${area.departmentHead || "-"} · ${area.summaryGroup || "-"} · ${getAreaScorerName(area)}`,
-          afterLabel: "Đã xóa",
-          changeLabel: `Xóa zone ${area.code}`,
-          note: "Điểm của zone đã bị xóa khỏi localStorage",
-        });
+        const removedScores = state.scores.filter((score) => score.areaId === id);
         state.areas = state.areas.filter((item) => item.id !== id);
         state.scores = state.scores.filter((score) => score.areaId !== id);
-        saveState();
-        showToast("Đã xóa zone.");
+        const writes = [
+          dbRef(`areas/${id}`).remove(),
+          ...removedScores.map((s) => dbRef(`scores/${s.id}`).remove()),
+          logAdminChange({
+            subjectLabel: "Zone",
+            areaCode: area.code,
+            beforeLabel: `${area.code} · ${area.departmentHead || "-"} · ${area.summaryGroup || "-"} · ${getAreaScorerName(area)}`,
+            afterLabel: "Đã xóa",
+            changeLabel: `Xóa zone ${area.code}`,
+            note: "Điểm của zone đã bị xóa khỏi Firebase",
+          }),
+        ];
+        Promise.all(writes).then(() => showToast("Đã xóa zone.")).catch(() => showToast("Lỗi khi xóa.", true));
       },
     });
   }
@@ -1526,15 +1697,18 @@
         account.scorerId = String(formData.get("scorerId") || "");
         account.username = username;
         account.password = String(formData.get("password") || "");
-        logAdminChange({
-          subjectLabel: "Tài khoản người chấm",
-          beforeLabel,
-          afterLabel: `${account.username} · ${getManager(account.scorerId)?.name || ""}`,
-          changeLabel: `Sửa tài khoản ${account.username}`,
-        });
-        saveState();
-        showToast("Đã cập nhật tài khoản.");
-        renderAll();
+        Promise.all([
+          dbRef(`accounts/${account.id}`).set(account),
+          logAdminChange({
+            subjectLabel: "Tài khoản người chấm",
+            beforeLabel,
+            afterLabel: `${account.username} · ${getManager(account.scorerId)?.name || ""}`,
+            changeLabel: `Sửa tài khoản ${account.username}`,
+          }),
+        ]).then(() => {
+          showToast("Đã cập nhật tài khoản.");
+          renderAll();
+        }).catch(() => showToast("Lỗi khi cập nhật.", true));
         return true;
       },
     });
@@ -1552,15 +1726,16 @@
       confirmText: "Xóa",
       danger: true,
       onConfirm() {
-        logAdminChange({
-          subjectLabel: "Tài khoản người chấm",
-          beforeLabel: `${account.username} · ${getManager(account.scorerId)?.name || ""}`,
-          afterLabel: "Đã xóa",
-          changeLabel: `Xóa tài khoản ${account.username}`,
-        });
         state.accounts = state.accounts.filter((item) => item.id !== id);
-        saveState();
-        showToast("Đã xóa tài khoản.");
+        Promise.all([
+          dbRef(`accounts/${id}`).remove(),
+          logAdminChange({
+            subjectLabel: "Tài khoản người chấm",
+            beforeLabel: `${account.username} · ${getManager(account.scorerId)?.name || ""}`,
+            afterLabel: "Đã xóa",
+            changeLabel: `Xóa tài khoản ${account.username}`,
+          }),
+        ]).then(() => showToast("Đã xóa tài khoản.")).catch(() => showToast("Lỗi khi xóa.", true));
       },
     });
   }
@@ -1577,10 +1752,10 @@
     }
 
     state.activePeriodId = id;
-    historyPage = 1;
-    saveState();
-    showToast("Đã đổi kỳ đánh giá.");
-    renderAll();
+    saveMeta().then(() => {
+      showToast("Đã đổi kỳ đánh giá.");
+      renderAll();
+    }).catch(() => showToast("Lỗi khi lưu.", true));
   }
 
   function deletePeriod(id) {
@@ -1596,45 +1771,52 @@
 
     openConfirmModal({
       title: "Xóa kỳ đánh giá",
-      message: `Xóa ${periodLabel(period)} khỏi localStorage?`,
+      message: `Xóa ${periodLabel(period)} trên Firebase?`,
       confirmText: "Xóa",
       danger: true,
       onConfirm() {
-        logAdminChange({
-          subjectLabel: "Kỳ đánh giá",
-          beforeLabel: periodLabel(period),
-          afterLabel: "Đã xóa",
-          changeLabel: `Xóa kỳ ${periodLabel(period)}`,
-          note: "Điểm của kỳ đã bị xóa khỏi localStorage",
-        });
+        const removedScores = state.scores.filter((score) => score.periodId === id);
         state.periods = state.periods.filter((item) => item.id !== id);
         state.scores = state.scores.filter((score) => score.periodId !== id);
         if (state.activePeriodId === id) {
           state.activePeriodId = getPeriods()[0]?.id || "";
         }
-        saveState();
-        showToast("Đã xóa kỳ đánh giá.");
+        const writes = [
+          dbRef(`periods/${id}`).remove(),
+          ...removedScores.map((s) => dbRef(`scores/${s.id}`).remove()),
+          saveMeta(),
+          logAdminChange({
+            subjectLabel: "Kỳ đánh giá",
+            beforeLabel: periodLabel(period),
+            afterLabel: "Đã xóa",
+            changeLabel: `Xóa kỳ ${periodLabel(period)}`,
+            note: "Điểm của kỳ đã bị xóa khỏi Firebase",
+          }),
+        ];
+        Promise.all(writes).then(() => showToast("Đã xóa kỳ đánh giá.")).catch(() => showToast("Lỗi khi xóa.", true));
       },
     });
   }
 
   function resetAllData() {
     openConfirmModal({
-      title: "Reset dữ liệu local",
-      message: "Reset sẽ đưa web app về đúng dữ liệu mẫu 5S ban đầu và xóa tài khoản/điểm/lịch sử đang lưu trên trình duyệt này.",
+      title: "Reset dữ liệu Firebase",
+      message: "Reset sẽ đưa hệ thống về dữ liệu mẫu 5S ban đầu và xóa tất cả tài khoản/điểm/lịch sử trên Firebase.",
       confirmText: "Reset",
       danger: true,
       onConfirm() {
         state = createDefaultState();
-        currentUser = null;
-        saveState();
-        closeModal();
-        elements.appShell.hidden = true;
-        elements.loginScreen.hidden = false;
-        showToast("Đã reset dữ liệu local.");
+        dbRef().set(stateToFirebase(state)).then(() => {
+          currentUser = null;
+          closeModal();
+          elements.appShell.hidden = true;
+          elements.loginScreen.hidden = false;
+          showToast("Đã reset dữ liệu Firebase.");
+        }).catch(() => showToast("Lỗi khi reset.", true));
       },
     });
   }
+
 
   function exportExcel(periodId) {
     const period = getPeriod(periodId);
@@ -2385,7 +2567,7 @@
     [elements.summaryPeriodSelect].forEach((select) => {
       select.addEventListener("change", () => {
         state.activePeriodId = select.value;
-        saveState();
+        saveMeta();
         renderAll();
       });
     });
@@ -2425,5 +2607,46 @@
     });
   }
 
-  bindEvents();
+  // ─── App initialisation ───────────────────────────────────────────────────────
+
+  const elements_loading = document.getElementById("loading-screen");
+
+  async function init() {
+    bindEvents();
+
+    try {
+      // Load initial state from Firebase
+      state = await loadStateFromFirebase();
+
+      // Set up realtime listener — re-render when another client changes data
+      dbRef().on("value", (snapshot) => {
+        const raw = snapshot.val();
+        if (raw && raw.version === DATA_VERSION) {
+          state = normalizeState(raw);
+          // Only re-render if user is already logged in
+          if (currentUser) {
+            // Keep currentUser in sync (account data may have changed)
+            const updatedAccount = state.accounts.find((a) => a.id === currentUser.id);
+            if (updatedAccount) {
+              currentUser = updatedAccount;
+            }
+            renderAll();
+          }
+        }
+      });
+
+      // Hide loading, show login
+      if (elements_loading) elements_loading.hidden = true;
+      elements.loginScreen.hidden = false;
+    } catch (error) {
+      console.error("Firebase init error:", error);
+      if (elements_loading) {
+        elements_loading.querySelector("p").textContent =
+          "Không kết nối được Firebase. Vui lòng kiểm tra firebase-config.js và kết nối mạng.";
+        elements_loading.querySelector(".loading-spinner").style.display = "none";
+      }
+    }
+  }
+
+  init();
 })();

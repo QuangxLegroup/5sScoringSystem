@@ -1,0 +1,66 @@
+{
+  "rules": {
+    "legroup-5s": {
+      ".read": true,
+      ".write": true,
+
+      "version": {
+        ".validate": "newData.isNumber()"
+      },
+      "benchmark": {
+        ".validate": "newData.isNumber()"
+      },
+      "activePeriodId": {
+        ".validate": "newData.isString()"
+      },
+
+      "periods": {
+        "$periodId": {
+          ".validate": "newData.hasChildren(['id', 'month', 'year'])",
+          "id": { ".validate": "newData.isString()" },
+          "month": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 12" },
+          "year": { ".validate": "newData.isNumber() && newData.val() >= 2020 && newData.val() <= 2100" }
+        }
+      },
+
+      "managers": {
+        "$managerId": {
+          ".validate": "newData.hasChildren(['id', 'name'])",
+          "id": { ".validate": "newData.isString()" },
+          "name": { ".validate": "newData.isString()" }
+        }
+      },
+
+      "areas": {
+        "$areaId": {
+          ".validate": "newData.hasChildren(['id', 'code'])",
+          "id": { ".validate": "newData.isString()" },
+          "code": { ".validate": "newData.isString()" }
+        }
+      },
+
+      "accounts": {
+        "$accountId": {
+          ".validate": "newData.hasChildren(['id', 'username', 'password'])",
+          "id": { ".validate": "newData.isString()" },
+          "username": { ".validate": "newData.isString()" },
+          "password": { ".validate": "newData.isString()" }
+        }
+      },
+
+      "scores": {
+        "$scoreId": {
+          ".validate": "newData.hasChildren(['id', 'periodId', 'areaId', 'itemId', 'criterionId'])",
+          "id": { ".validate": "newData.isString()" },
+          "score": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 5" }
+        }
+      },
+
+      "history": {
+        "$historyId": {
+          ".validate": "newData.hasChildren(['id', 'timestamp'])"
+        }
+      }
+    }
+  }
+}

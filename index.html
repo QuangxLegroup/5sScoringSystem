@@ -9,7 +9,16 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <section class="login-screen" id="login-screen">
+    <section class="loading-screen" id="loading-screen">
+      <div class="loading-card">
+        <img class="brand-logo" src="../images/Logo.jpg" alt="LeGroup">
+        <h1>LeGroup 5S</h1>
+        <div class="loading-spinner"></div>
+        <p>Đang kết nối Firebase…</p>
+      </div>
+    </section>
+
+    <section class="login-screen" id="login-screen" hidden>
       <form class="login-card" id="login-form">
         <div class="brand-line">
           <img class="brand-logo" src="../images/Logo.jpg" alt="LeGroup">
@@ -153,7 +162,7 @@
 
             <section class="panel danger-panel">
               <div class="section-heading">
-                <h2>Dữ liệu local</h2>
+                <h2>Dữ liệu Firebase</h2>
               </div>
               <button class="danger-button" id="reset-data-button" type="button">Reset về mẫu 5S</button>
             </section>
@@ -206,6 +215,9 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+    <script src="firebase-config.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
