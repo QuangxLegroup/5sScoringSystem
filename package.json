@@ -2,7 +2,7 @@
   "name": "legroup-5s-local",
   "version": "3.0.0",
   "private": true,
-  "description": "Ung dung danh gia 5S luu tam tren localStorage cua trinh duyet.",
+  "description": "Ung dung danh gia 5S luu du lieu tren Firebase Realtime Database.",
   "scripts": {
     "check": "node --check app.js"
   },
